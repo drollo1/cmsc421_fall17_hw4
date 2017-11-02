@@ -3,25 +3,25 @@
 //Author Name: Dominic Rollo
 //Assignment: Homework 4
 //
-//  
+//  Allocates some memory then manages the creation and use
+// of these blocks of data.
 //
 //**************Outside Help*********************************
 //  
 //
 //***********************************************************
 //**************Questions************************************
-//  1.
+//  1. 48 bytes.  My table was an array of 12 ints.  Ints are
+//	   four bytes meaning that 12*4= 48.
+//  2. My code compares the memory locations of the start of
+//     the block to the pointer passed in.  If it does not
+//     match any on the block starts then the signal is raised
 //***********************************************************
-//#define _BSD_SOURCE
 
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <signal.h>
-//#include <string.h>
-//#include <unistd.h>
-//#include <sys/types.h>
-//#include <sys/wait.h>
 #include <pthread.h>
 
 extern void hw4_test(void);
@@ -30,7 +30,8 @@ extern void hw4_test(void);
 #define PAGE_SIZE 32
 
 char static main_memory[PAGES][PAGE_SIZE];
-int static mem_table[PAGES];
+int static mem_table[PAGES], reallocing;
+pthread_mutex_t mem_lock;
 
 //**************************************************************
 //  Initilizes the memory to zeros and lables memory as free
@@ -43,6 +44,7 @@ static void initilize(void){
 	for(int i=0;i<PAGES;i++){
 		mem_table[i]=-1;
 	}
+	reallocing=0;
 }
 
 /**
@@ -58,6 +60,7 @@ static void initilize(void){
  *   column, display a 'f' if the frame is free, 'R' if reserved.
  */
 void my_malloc_stats(void){
+	pthread_mutex_lock(&mem_lock);
 	printf("Memory contents:\n");
 	for(int i=0;i<PAGES;i++){
 		printf("  ");
@@ -77,16 +80,16 @@ void my_malloc_stats(void){
 			printf("R");
 	}
 	printf("\n");
-
+	pthread_mutex_unlock(&mem_lock);
 	//*******************************TEST Mark<<<<<<<<<
-	printf("  ");
+	/*printf("  ");
 	for(int i=0;i<PAGES; i++)
 		if(mem_table[i]==-1)
 			printf("*");
 		else
 			printf("%d", mem_table[i]);
 	printf("\n");
-	//*************************************************
+	*///*************************************************
 }
 
 /**
@@ -110,6 +113,7 @@ void my_malloc_stats(void){
  * be found. If out of memory, set errno to @c ENOMEM.
  */
 void *my_malloc(size_t size){
+	pthread_mutex_lock(&mem_lock);
 	if(size==0){
 		return NULL;
 	}
@@ -139,15 +143,16 @@ void *my_malloc(size_t size){
 
 	if (pages>large_size){
 		errno = ENOMEM;
+		pthread_mutex_unlock(&mem_lock);
 		return NULL;
 	}
 
 	for(int i=large; i<large+pages; i++)
 		mem_table[i]=large;
 
+	pthread_mutex_unlock(&mem_lock);
 	return &main_memory[large];
 }
-
 
 //*************************************************************
 //  returns a -1 if the pointer is not the start of a block 
@@ -182,10 +187,14 @@ static int block_size(int start){
  * pointer returned by my_malloc() or my_realloc() (such as @c NULL).
  */
 size_t my_malloc_usable_size(void *ptr){
+	pthread_mutex_lock(&mem_lock);
 	int temp=is_start(ptr);
-	if(ptr==NULL||temp==-1)
+	if(ptr==NULL||temp==-1){
+		pthread_mutex_unlock(&mem_lock);
 		return 0;
+	}
 	temp = block_size(temp);
+	pthread_mutex_unlock(&mem_lock);
 	return temp*32;
 }
 
@@ -202,6 +211,7 @@ size_t my_malloc_usable_size(void *ptr){
  * nothing.
  */
 void my_free(void *ptr){
+	pthread_mutex_lock(&mem_lock);
 	if(ptr!=NULL){
 		int temp=is_start(ptr);
 		if (temp>-1){
@@ -212,6 +222,7 @@ void my_free(void *ptr){
 		else
 			raise(SIGSEGV);
 	}
+	pthread_mutex_unlock(&mem_lock);
 }
 
 /**
@@ -253,8 +264,9 @@ void *my_realloc(void *ptr, size_t size){
 	else{
 		int temp =is_start(ptr);
 		int bl_size = block_size(temp);
-		if(temp==-1)
+		if(temp==-1){
 			raise(SIGSEGV);
+		}
 		else{
 			int pages;
 			if((size%32)==0)
@@ -263,32 +275,29 @@ void *my_realloc(void *ptr, size_t size){
 				pages = size/32 +1;
 			if(bl_size<pages){
 				void *temp_ptr=my_malloc(size);
+				pthread_mutex_lock(&mem_lock);
 				int new = is_start(temp_ptr);
 				for(int i=0; i<bl_size;i++)
 					for(int j=0;j<PAGE_SIZE;j++)
 						main_memory[new+i][j]=main_memory[temp+i][j];
+				pthread_mutex_unlock(&mem_lock);
 				my_free(ptr);
 				return temp_ptr;
 			}else if(bl_size>pages){
-				printf("Shrinking block size: %d pages: %d\n", bl_size, pages);
+				pthread_mutex_lock(&mem_lock);
 				for(int i=0;i<bl_size-pages;i++)
 					mem_table[temp+pages+i]=-1;
+				pthread_mutex_unlock(&mem_lock);
+				return ptr;
 			}
-
 		}
 	}
+	return NULL;
 }
 
 int main(int argc, char *argv[]){
 	initilize();
-	/*
-	mem_table[0]=0;
-	mem_table[3]=3;
-	mem_table[4]=3;
-	mem_table[8]=8;
-	my_malloc_stats();
-	my_malloc(120);
-	*/
+	pthread_mutex_init(&mem_lock, NULL);
 	hw4_test();
 
 	return 0;
